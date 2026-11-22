@@ -48,8 +48,15 @@ jobs:
       - name: Build APK and verify Android 6 minimum SDK
         working-directory: appsrc/native-android
         run: |
-          gradle --no-daemon assembleDebug
-          grep -R 'minSdkVersion' app/build/outputs/logs/manifest-merger-debug-report.txt || true
+          set +e
+          gradle --no-daemon assembleDebug > /tmp/native-gradle.log 2>&1
+          result=$?
+          tail -n 120 /tmp/native-gradle.log
+          if [ $result -ne 0 ]; then
+            grep -E '(^e: | error:|FAILURE:|What went wrong:|Could not resolve|Unresolved reference|No value passed)' /tmp/native-gradle.log | tail -n 20 | tr '\n' ' ' > /tmp/native-errors.txt || true
+            echo "::error title=Native Android build details::$(cat /tmp/native-errors.txt)"
+            exit $result
+          fi
           test -s app/build/outputs/apk/debug/app-debug.apk
           sha256sum app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
