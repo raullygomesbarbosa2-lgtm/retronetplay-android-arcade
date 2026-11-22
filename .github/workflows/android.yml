@@ -1,0 +1,56 @@
+name: Build Android APK
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Unpack application source
+        run: |
+          mkdir appsrc
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('project-source.zip') as z:
+              z.extractall('appsrc')
+          PY
+      - name: Install Capacitor and build web assets
+        working-directory: appsrc
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          npx cap add android
+          sed -i 's/minSdkVersion = 23/minSdkVersion = 23/' android/variables.gradle || true
+          sed -i 's/minSdkVersion = [0-9]*/minSdkVersion = 23/' android/variables.gradle
+          sed -i 's/targetSdkVersion = [0-9]*/targetSdkVersion = 35/' android/variables.gradle
+          mkdir -p android/app/src/main/java/com/bytevortex/retronetplay
+          cp android-template/app/src/main/java/com/bytevortex/retronetplay/*.java android/app/src/main/java/com/bytevortex/retronetplay/
+          npx cap sync android
+      - name: Verify Android 6 minimum SDK and compile APK
+        working-directory: appsrc/android
+        run: |
+          grep -R 'minSdkVersion' app/build.gradle variables.gradle
+          ./gradlew --no-daemon assembleDebug
+      - name: Calculate APK checksum
+        run: sha256sum appsrc/android/app/build/outputs/apk/debug/app-debug.apk > appsrc/android/app/build/outputs/apk/debug/SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-build-${{ github.run_number }}
+          name: RetroNetPlay Android build ${{ github.run_number }}
+          body: |
+            APK gerado por CI para Android 6.0+ (API 23), em dispositivo ARM/Android.
+            Inclui modo Arcade solo, controles táteis, leitura de gamepads reconhecidos pelo Android, botão de tela cheia e tentativa de rotação horizontal.
+            A compilação não equivale a teste em telefone. O multiplayer depende do servidor online, que não está neste APK.
+          files: |
+            appsrc/android/app/build/outputs/apk/debug/app-debug.apk
+            appsrc/android/app/build/outputs/apk/debug/SHA256SUMS.txt
