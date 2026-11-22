@@ -1,0 +1,66 @@
+name: Build native Android APK (no WebView)
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android SDK components
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+      - name: Unpack native Android source
+        run: |
+          mkdir appsrc
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('project-source.zip') as z: z.extractall('appsrc')
+          PY
+      - name: Fetch open-source FBNeo native cores (ARMv7 + ARM64)
+        run: |
+          mkdir -p appsrc/native-android/app/src/main/assets/cores/arm64-v8a appsrc/native-android/app/src/main/assets/cores/armeabi-v7a
+          curl -fL --retry 3 'https://buildbot.libretro.com/nightly/android/latest/arm64-v8a/fbneo_libretro_android.so.zip' -o /tmp/fbneo64.zip
+          curl -fL --retry 3 'https://buildbot.libretro.com/nightly/android/latest/armeabi-v7a/fbneo_libretro_android.so.zip' -o /tmp/fbneo32.zip
+          python3 - <<'PY'
+          import zipfile
+          for archive, target in [('/tmp/fbneo64.zip','appsrc/native-android/app/src/main/assets/cores/arm64-v8a/fbneo_libretro_android.so'),('/tmp/fbneo32.zip','appsrc/native-android/app/src/main/assets/cores/armeabi-v7a/fbneo_libretro_android.so')]:
+              with zipfile.ZipFile(archive) as z:
+                  name=next(n for n in z.namelist() if n.endswith('.so'))
+                  open(target,'wb').write(z.read(name))
+          PY
+          printf 'Native frontend: LibretroDroid 0.14.0 (GPL-3.0)\nArcade core: FBNeo Android nightly from buildbot.libretro.com\nNo game ROMs or BIOS are included.\n' > appsrc/native-android/OPEN_SOURCE_NOTICES.txt
+      - name: Build APK and verify Android 6 minimum SDK
+        working-directory: appsrc/native-android
+        run: |
+          gradle --no-daemon assembleDebug
+          grep -R 'minSdkVersion' app/build/outputs/logs/manifest-merger-debug-report.txt || true
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          sha256sum app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: native-alpha-${{ github.run_number }}
+          name: RetroNetPlay Native Alpha ${{ github.run_number }}
+          body: |
+            First native Android frontend prototype, no WebView; minSdk 23 (Android 6+).
+            Includes native solo Arcade launcher, ROM file picker, touch controls, gamepad input, and FBNeo core for ARMv7 + ARM64.
+            Not feature-equivalent to the old app: account, online room/netplay, and other systems are not yet converted. No ROMs or BIOS included.
+            CI compilation is not a real-device gameplay test.
+          files: |
+            appsrc/native-android/app/build/outputs/apk/debug/app-debug.apk
+            appsrc/native-android/app/build/outputs/apk/debug/SHA256SUMS.txt
